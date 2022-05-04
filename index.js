@@ -5,16 +5,23 @@ var Parser = require('binary-parser').Parser;
 const commandLineArgs = require('command-line-args')
 
 const optionDefinitions = [
-	{ name: 'bms', alias: 'b', type: Boolean },
-	{ name: 'inverter', alias: 'i', type: String },
-	{ name: 'address', alias: 'a', type: Number },
-	{ name: 'mqttclientid', alias: 'm', type: String }
+	{ name: 'batriumv2', alias: 'b', type: Boolean,  defaultValue: false},
+	{ name: 'invif', alias: 'c', type: String, defaultValue: "can0" },
+	{ name: 'bmsif', alias: 'C', type: String, defaultValue: "can1" },
+	{ name: 'debug', alias: 'd', type: Boolean, defaultValue: false },
+	{ name: 'verbose', alias: 'v', type: Boolean, defaultValue: false },
   ];
 
 const options = commandLineArgs(optionDefinitions)
 
-var channelGoodWe  = can.createRawChannel("can0", true /* ask for timestamps */);
-var channelBatrium = can.createRawChannel("can1", true /* ask for timestamps */);
+var invif = options.invif;
+var bmsif = options.bmsif;
+
+console.log("Inverter interface: " + invif);
+console.log("BMS interface     : " + bmsif);
+
+var channelGoodWe  = can.createRawChannel(invif, true /* ask for timestamps */);
+var channelBatrium = can.createRawChannel(bmsif, true /* ask for timestamps */);
 
 channelGoodWe.start();
 channelBatrium.start();
@@ -82,9 +89,58 @@ const GoodWe420Parser = new Parser()
         .string('Signature',    { encoding: 'utf8', length: 8, stripNull: true })
         ;
 
+const GoodWe421Parser = new Parser()
+        .uint8('Year')
+        .uint8('Month')
+        .uint8('Day')
+        .uint8('Hour')
+        .uint8('Min')
+        .uint8('Sec')
+        .seek(2)
+        ;
+
 const GoodWe425Parser = new Parser()
         .uint16le('BatteryVoltage', { formatter: (x) => {return x/10.0;}})
         .int16le('BatteryCurrent', { formatter: (x) => {return x/10.0;}})
+        ;
+
+const GoodWe453Parser = new Parser()
+        .uint8('BatteryModules')
+        ;
+
+const GoodWe455Parser = new Parser()
+        .uint16le('BMSAlarms')
+        .seek(2)
+        .uint16le('BMSWarnings')
+        .seek(2)
+        ;
+
+const GoodWe456Parser = new Parser()
+        .uint16le('ChargeVoltage', { formatter: (x) => {return x/10.0;}})
+        .uint16le('ChargeCurrent', { formatter: (x) => {return x/10.0;}})
+        .uint16le('DischargeCurrent', { formatter: (x) => {return x/10.0;}})
+        .uint16le('DischargeVoltage', { formatter: (x) => {return x/10.0;}})
+        ;
+
+const GoodWe457Parser = new Parser()
+        .uint16le('SOC', { formatter: (x) => {return x/100.0;}})
+        .uint16le('SOH', { formatter: (x) => {return x/100.0;}})
+        .seek(4)
+        ;
+
+const GoodWe458Parser = new Parser()
+        .uint16le('BatteryVoltage', { formatter: (x) => {return x/10.0;}})
+        .uint16le('BatteryCurrent', { formatter: (x) => {return x/10.0;}})
+        .uint16le('BatteryTemperature', { formatter: (x) => {return x/10.0;}})
+        .seek(2)
+        ;
+
+const GoodWe45aParser = new Parser()
+        .seek(8)
+        ;
+
+const GoodWe460Parser = new Parser()
+        .seek(2)
         ;
 
 var BMS = [];
@@ -115,17 +171,45 @@ function BatriumGetPayload(msg) {
         if(msg.id==0x07) {
           BMS["Batrium07"] = Batrium07Parser.parse(msg.data);
         }
-//        console.log(util.inspect(BMS));
+        if(options.verbose) {
+          console.log(util.inspect(BMS));
+        }
 }
 
 function GoodWeGetPayload(msg) {
         if(msg.id==0x420) {
           GoodWe["GoodWe420"] = GoodWe420Parser.parse(msg.data);
         }
-        if(msg.id==0x425) { 
+        if(msg.id==0x421) {
+          GoodWe["GoodWe421"] = GoodWe421Parser.parse(msg.data);
+        }
+        if(msg.id==0x425) {
           GoodWe["GoodWe425"] = GoodWe425Parser.parse(msg.data);
         }
-//        console.log(util.inspect(GoodWe));
+        if(msg.id==0x453) {
+          GoodWe["GoodWe453"] = GoodWe453Parser.parse(msg.data);
+        }
+        if(msg.id==0x455) {
+          GoodWe["GoodWe455"] = GoodWe455Parser.parse(msg.data);
+        }
+        if(msg.id==0x456) {
+          GoodWe["GoodWe456"] = GoodWe456Parser.parse(msg.data);
+        }
+        if(msg.id==0x457) {
+          GoodWe["GoodWe457"] = GoodWe457Parser.parse(msg.data);
+        }
+        if(msg.id==0x458) {
+          GoodWe["GoodWe458"] = GoodWe458Parser.parse(msg.data);
+        }
+        if(msg.id==0x45a) {
+          GoodWe["GoodWe45a"] = GoodWe45aParser.parse(msg.data);
+        }
+        if(msg.id==0x460) {
+          GoodWe["GoodWe460"] = GoodWe460Parser.parse(msg.data);
+        }
+        if(options.verbose) {
+          console.log(util.inspect(GoodWe));
+        }
 }
 
 function toHex(number) {
@@ -133,24 +217,33 @@ function toHex(number) {
 }
 
 function BatriumPacket(msg) {
-/*
-  console.log('Batrium: (' + (msg.ts_sec + msg.ts_usec / 1000000).toFixed(6) + ') ' +
-    toHex(msg.id).toUpperCase() + '#' + msg.data.toString('hex').toUpperCase());
-*/
+
+  if(options.debug) {
+    console.log('Batrium: (' + (msg.ts_sec + msg.ts_usec / 1000000).toFixed(6) + ') ' +
+      toHex(msg.id).toUpperCase() + '#' + msg.data.toString('hex').toUpperCase());
+  }
+
   BatriumGetPayload(msg);
 }
 
 function GoodWePacket(msg) {
-/*
-  console.log('GoodWe: (' + (msg.ts_sec + msg.ts_usec / 1000000).toFixed(6) + ') ' +
-    toHex(msg.id).toUpperCase() + '#' + msg.data.toString('hex').toUpperCase());
-*/
-//    console.log(msg.data.toString());
+
+  if(options.debug) {
+    console.log('GoodWe: (' + (msg.ts_sec + msg.ts_usec / 1000000).toFixed(6) + ') ' +
+      toHex(msg.id).toUpperCase() + '#' + msg.data.toString('hex').toUpperCase());
+  }
   GoodWeGetPayload(msg);
 }
 
 channelGoodWe.addListener("onMessage", GoodWePacket);
-channelBatrium.addListener("onMessage", BatriumPacket);
+
+if(options.batriumv2) {
+  console.log("using batrium v2 protocol on " + bmsif);
+  channelBatrium.addListener("onMessage", BatriumPacket);
+} else {
+  console.log("using GoodWe native protocol on " + bmsif);
+  channelBatrium.addListener("onMessage", GoodWePacket);
+}
 
 function GoodWeSend(id, data) {
   var msg = {
@@ -158,8 +251,21 @@ function GoodWeSend(id, data) {
     length: data.length,
     data: data
   };
-//  console.log(util.inspect(msg));
+  if(options.debug) {
+    console.log("->GoodWe: " + util.inspect(msg));
+  }
   channelGoodWe.send(msg);
+}
+function BatriumSend(id, data) {
+  var msg = {
+    id: id,
+    length: data.length,
+    data: data
+  };
+  if(options.debug) {
+    console.log("->Batrium: " + util.inspect(msg));
+  }
+  channelBatrium.send(msg);
 }
 
 function GoodWeIntervalFunc() {
@@ -168,7 +274,7 @@ function GoodWeIntervalFunc() {
     // Strings
     var data = Buffer.alloc(8);
     data[0] = 8;
-    GoodWeSend(0x452, data);
+    GoodWeSend(0x453, data);
 
     // Alarms & Warnings
     var data = Buffer.alloc(8);
@@ -181,7 +287,7 @@ function GoodWeIntervalFunc() {
     data.writeUInt16LE(BMS['Batrium06']['ChargeTargetAmp']*10,2);
     data.writeUInt16LE(BMS['Batrium06']['DischargeTargetAmp']*10,4);
     data.writeUInt16LE(BMS['Batrium06']['DischargeTargetVoltage']*10,6);
- 
+
     GoodWeSend(0x456, data);
 
     // SOC & SOH
@@ -203,6 +309,78 @@ function GoodWeIntervalFunc() {
     var data = Buffer.alloc(2);
     GoodWeSend(0x460, data);
   }
+  if(GoodWe['GoodWe453'] && GoodWe['GoodWe455'] && GoodWe['GoodWe456'] && GoodWe['GoodWe457'] && GoodWe['GoodWe458']) {
+  // Strings
+    var data = Buffer.alloc(8);
+
+    data.writeUInt8(GoodWe['GoodWe453']['BatteryModules'],0);
+    GoodWeSend(0x453, data);
+
+    // Alarms & Warnings
+    var data = Buffer.alloc(8);
+
+    data.writeUInt16LE(GoodWe['GoodWe453']['BMSAlarms'],0);
+    data.writeUInt16LE(GoodWe['GoodWe453']['BMSWarnings'],4);
+    GoodWeSend(0x455, data);
+
+    // Targets
+    var data = Buffer.alloc(8);
+
+    data.writeUInt16LE(GoodWe['GoodWe456']['ChargeVoltage']*10,0);
+    data.writeUInt16LE(GoodWe['GoodWe456']['ChargeCurrent']*10,2);
+    data.writeUInt16LE(GoodWe['GoodWe456']['DischargeCurrent']*10,4);
+    data.writeUInt16LE(GoodWe['GoodWe456']['DischargeVoltage']*10,6);
+
+    GoodWeSend(0x456, data);
+
+    // SOC & SOH
+    var data = Buffer.alloc(8);
+    data.writeUInt16LE(GoodWe['GoodWe457']['SOC']*100,0);
+    data.writeUInt16LE(GoodWe['GoodWe457']['SOH']*100,2);
+    GoodWeSend(0x457, data);
+
+    // Voltage & Current
+    var data = Buffer.alloc(8);
+    data.writeUInt16LE(GoodWe['GoodWe458']['BatteryVoltage']*10,0);
+    data.writeInt16LE( GoodWe['GoodWe458']['BatteryCurrent']*10,2);
+    data.writeInt16LE( GoodWe['GoodWe458']['BatteryTemperature']*10,4);
+    GoodWeSend(0x458, data);
+
+    var data = Buffer.alloc(8);
+    GoodWeSend(0x45a, data);
+
+    var data = Buffer.alloc(2);
+    GoodWeSend(0x460, data);
+  }
+
+  if(GoodWe['GoodWe420']) {
+  // Signature
+    var data = Buffer.alloc(8);
+
+    data.write(GoodWe['GoodWe420']['Signature'],0);
+//    BatriumSend(0x420, data);
+  }
+  if(GoodWe['GoodWe421']) {
+  // Date & Time
+    var data = Buffer.alloc(8);
+
+    data.writeUInt8(GoodWe['GoodWe421']['Year'],0);
+    data.writeUInt8(GoodWe['GoodWe421']['Month'],1);
+    data.writeUInt8(GoodWe['GoodWe421']['Day'],2);
+    data.writeUInt8(GoodWe['GoodWe421']['Hour'],3);
+    data.writeUInt8(GoodWe['GoodWe421']['Min'],4);
+    data.writeUInt8(GoodWe['GoodWe421']['Sec'],5);
+//    BatriumSend(0x421, data);
+  }
+  if(GoodWe['GoodWe425']) {
+  // Battery Voltage & Current
+    var data = Buffer.alloc(8);
+
+    data.writeUInt16LE(GoodWe['GoodWe425']['BatteryVoltage']*10,0);
+    data.writeInt16LE(GoodWe['GoodWe425']['BatteryCurrent']*10,2);
+    BatriumSend(0x425, data);
+  }
 }
 
 setInterval(GoodWeIntervalFunc, 1000);
+
