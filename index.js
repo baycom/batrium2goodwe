@@ -319,8 +319,8 @@ function GoodWeIntervalFunc() {
     // Alarms & Warnings
     var data = Buffer.alloc(8);
 
-    data.writeUInt16LE(GoodWe['GoodWe453']['BMSAlarms'],0);
-    data.writeUInt16LE(GoodWe['GoodWe453']['BMSWarnings'],4);
+    data.writeUInt16LE(GoodWe['GoodWe455']['BMSAlarms'],0);
+    data.writeUInt16LE(GoodWe['GoodWe455']['BMSWarnings'],4);
     GoodWeSend(0x455, data);
 
     // Targets
